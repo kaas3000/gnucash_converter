@@ -2,6 +2,7 @@ import csv
 import datetime
 from decimal import *
 import locale
+from Transaction import transaction
 
 
 class GnuCashConverter:
@@ -20,9 +21,9 @@ class GnuCashConverter:
         with open(source) as csvFile:
             with open (target, 'w', newline='') as newFile:
 
-                if bank == 'rabobank':
+                if bank == 'rabobank (csv)':
                     converter = rabobankConverter(csv.reader(csvFile, delimiter=',', quotechar='"'))
-                elif bank == 'rabobank (old)':
+                elif bank == 'rabobank (txt)':
                     converter = rabobankTXTConverter(csv.reader(csvFile, delimiter=',', quotechar='"'))
                 elif bank == 'ing':
                     converter = ingConverter(csv.reader(csvFile, delimiter=';', quotechar='"'))
@@ -35,14 +36,15 @@ class GnuCashConverter:
 
                 gnucashCsv = csv.writer(newFile, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
 
-                gnucashCsv.writerow(['date', 'credit', 'debet', 'cumulative', 'message'])
+                # gnucashCsv.writerow(['date', 'credit', 'debet', 'cumulative', 'message'])
+                gnucashCsv.writerow(transaction.heading)
 
                 # converter class is iterable
                 while converter.nextRow():
                     if (self.testing):
-                        print(converter.getRow())
+                        print(converter.getRow().asList())
                     else:
-                        gnucashCsv.writerow(converter.getRow())
+                        gnucashCsv.writerow(converter.getRow().asList())
 
     def setTesting(self):
         '''
@@ -98,7 +100,7 @@ class abstractConverter:
 
         return True
 
-    def getRow(self):
+    def getRow(self) -> transaction:
         '''
         get the next row
         '''
@@ -147,44 +149,30 @@ class rabobankConverter(abstractConverter):
         if counter == 0:
             return False
 
-        newRow = []
+        newTransaction = transaction()
 
         # date
-        newRow.append(row[4])
+        newTransaction.date = datetime.datetime.strptime(row[4], "%Y-%m-%d").date()
 
-        amount = parseAmount(row[6], rabobankCsvDecimalSeperator).copy_abs()
+        amount = parseAmount(row[6], rabobankCsvDecimalSeperator)
 
         # amount - credit
         if amount >= 0:
-            newRow.append(amount)
-            newRow.append(0)
+            newTransaction.deposit = amount.copy_abs()
 
         # amount - debet
         else:
-            newRow.append(0)
-            newRow.append(amount)
+            newTransaction.withdrawal = amount.copy_abs()
 
         # Balance
-        newRow.append(parseAmount(row[7], rabobankCsvDecimalSeperator))
+        newTransaction.balance = parseAmount(row[7], rabobankCsvDecimalSeperator)
 
-        newRow.append(self.setMessage(row))
+        newTransaction.num = row[3]  # Volgnr
+        newTransaction.description = row[9]  # Naam tegenpartij
+        newTransaction.account = row[0]  # IBAN/BBAN
+        newTransaction.notes = self.setMessage(row)
 
-        return newRow
-
-    def calculateBalance(self, amount, type, counter):
-        '''
-        calculate the current balance
-        '''
-
-        if counter == 0:
-            return self.balance
-        else:
-            if type == "credit":
-                self.balance = Decimal(self.balance) + amount
-            elif type == "debet":
-                self.balance = Decimal(self.balance) - amount
-
-        return str(round(self.balance, 2))
+        return newTransaction
 
     def setMessage(self, row):
         '''
@@ -218,28 +206,29 @@ class rabobankTXTConverter(abstractConverter):
         create a new row from an import csv row
         '''
 
-        new_row = []
+        rabobankCsvDecimalSeperator = ','
+        newTransaction = transaction()
 
         # date
         # there are two dates - this one seems to be the more accurate one
-        new_row.append(datetime.datetime.strptime(row[2], "%Y%m%d").strftime("%Y-%m-%d"))
+        newTransaction.date = datetime.datetime.strptime(row[2], "%Y%m%d").date()
+        # newTransaction.append(datetime.datetime.strptime(row[2], "%Y%m%d").strftime("%Y-%m-%d"))
+        amount = parseAmount(row[4], rabobankCsvDecimalSeperator)
 
         # amount - credit
         if row[3] == 'C':
-            new_row.append(row[4])
-            new_row.append(0)
+            newTransaction.deposit = amount
 
-            new_row.append(self.calculateBalance(Decimal(row[4]), "credit", counter))
+            newTransaction.balance = self.calculateBalance(amount, "credit", counter)
         # amount - debet
         elif row[3] == 'D':
-            new_row.append(0)
-            new_row.append(row[4])
+            newTransaction.withdrawal = amount
 
-            new_row.append(self.calculateBalance(Decimal(row[4]), "debet", counter))
+            newTransaction.balance = (self.calculateBalance(amount, "debet", counter))
 
-        new_row.append(self.setMessage(row))
+        newTransaction.description = self.setMessage(row)
 
-        return new_row
+        return newTransaction
 
     def calculateBalance(self, amount, type, counter):
         '''
@@ -280,27 +269,27 @@ class ingConverter(abstractConverter):
         if counter == 0:
             return False
 
-        new_row = []
+        newTransaction = transaction()
+        ingCsvDecimalSeperator = ','
 
         # date
-        new_row.append(datetime.datetime.strptime(row[1], "%Y%m%d").strftime("%Y-%m-%d"))
+        newTransaction.date = datetime.datetime.strptime(row[1], "%Y%m%d")
 
+        amount = parseAmount(row[7], ingCsvDecimalSeperator)
         # amount - credit
         if row[6] == 'Bij':
-            new_row.append(row[7].replace(",", "."))
-            new_row.append(0)
+            newTransaction.deposit = amount
 
-            new_row.append(self.calculateBalance(Decimal(row[7].replace(",", ".")), "credit", counter))
+            newTransaction.balance = self.calculateBalance(amount, "credit", counter)
         # amount - debet
         elif row[6] == 'Af':
-            new_row.append(0)
-            new_row.append(row[7].replace(",", "."))
+            newTransaction.withdrawal = amount
 
-            new_row.append(self.calculateBalance(Decimal(row[7].replace(",", ".")), "debet", counter))
+            newTransaction.balance = self.calculateBalance(amount, "debet", counter)
 
-        new_row.append(self.setMessage(row))
+        newTransaction.description = self.setMessage(row)
 
-        return new_row
+        return newTransaction
 
     def calculateBalance(self, amount, type, counter):
         '''
